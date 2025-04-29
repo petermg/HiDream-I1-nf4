@@ -10,7 +10,6 @@ OUTPUT_DIR = ".\outputs"
 
 # Resolution options
 RESOLUTION_OPTIONS = [
-    "1920 × 1080 (Landscape)",
     "1024 × 1024 (Square)",
     "768 × 1360 (Portrait)",
     "1360 × 768 (Landscape)",
