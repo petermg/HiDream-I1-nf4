@@ -2,6 +2,8 @@ import inspect
 from typing import Any, Callable, Dict, List, Optional, Union
 import math
 import einops
+import numpy as np
+from PIL import Image
 import torch
 from transformers import (
     CLIPTextModelWithProjection,
@@ -143,6 +145,7 @@ class HiDreamImagePipeline(DiffusionPipeline, FromSingleFileMixin):
         self.vae_scale_factor = (
             2 ** (len(self.vae.config.block_out_channels) - 1) if hasattr(self, "vae") and self.vae is not None else 8
         )
+        print(f"vae_scale_factor: {self.vae_scale_factor}")  # Debug
         # HiDreamImage latents are turned into 2x2 patches and packed. This means the latent width and height has to be divisible
         # by the patch size. So the vae scale factor is multiplied by the patch size to account for this
         self.image_processor = VaeImageProcessor(vae_scale_factor=self.vae_scale_factor * 2)
@@ -479,6 +482,7 @@ class HiDreamImagePipeline(DiffusionPipeline, FromSingleFileMixin):
         width = 2 * (int(width) // (self.vae_scale_factor * 2))
 
         shape = (batch_size, num_channels_latents, height, width)
+        print(f"Latent shape: {shape}")  # Debug
 
         if latents is None:
             latents = randn_tensor(shape, generator=generator, device=device, dtype=dtype)
@@ -538,14 +542,29 @@ class HiDreamImagePipeline(DiffusionPipeline, FromSingleFileMixin):
         callback_on_step_end_tensor_inputs: List[str] = ["latents"],
         max_sequence_length: int = 128,
     ):
+        original_width = width or self.default_sample_size * self.vae_scale_factor
+        original_height = height or self.default_sample_size * self.vae_scale_factor
         height = height or self.default_sample_size * self.vae_scale_factor
         width = width or self.default_sample_size * self.vae_scale_factor
 
         division = self.vae_scale_factor * 2
-        S_max = (self.default_sample_size * self.vae_scale_factor) ** 2
-        scale = S_max / (width * height)
-        scale = math.sqrt(scale)
-        width, height = int(width * scale // division * division), int(height * scale // division * division)
+        print(f"division: {division}")  # Debug
+        # Ensure latent dimensions produce ≤ 4096 patches
+        max_patches = 4096
+        patch_size = 2  # From transformer.config.patch_size
+        max_latent_pixels = max_patches * (patch_size ** 2)  # 4096 * 4 = 16384
+        latent_width = 2 * (int(width) // division)
+        latent_height = 2 * (int(height) // division)
+        latent_pixels = latent_width * latent_height
+        print(f"Initial latent dimensions: {latent_width}x{latent_height}, pixels: {latent_pixels}")  # Debug
+        if latent_pixels > max_latent_pixels:
+            scale = (max_latent_pixels / latent_pixels) ** 0.5
+            width = int(width * scale // division * division)
+            height = int(height * scale // division * division)
+        else:
+            width = int(width // division * division)
+            height = int(height // division * division)
+        print(f"Adjusted resolution in __call__: {width}x{height}")  # Debug
 
         self._guidance_scale = guidance_scale
         self._joint_attention_kwargs = joint_attention_kwargs
@@ -722,7 +741,26 @@ class HiDreamImagePipeline(DiffusionPipeline, FromSingleFileMixin):
             latents = (latents / self.vae.config.scaling_factor) + self.vae.config.shift_factor
 
             image = self.vae.decode(latents, return_dict=False)[0]
-            image = self.image_processor.postprocess(image, output_type=output_type)
+            print(f"VAE output shape: {image.shape}")  # Debug
+            # Debug VAE output range
+            print(f"VAE output range: min={image.min().item():.3f}, max={image.max().item():.3f}, mean={image.mean().item():.3f}")
+            # Manual postprocessing to avoid VaeImageProcessor resizing
+            if output_type == "pil":
+                # Convert tensor to PIL images
+                image = image.to(torch.float32).permute(0, 2, 3, 1).cpu()  # [batch, height, width, channels]
+                # Normalize to [0, 1] assuming VAE output is in [-1, 1]
+                image = (image + 1.0) / 2.0  # Shift from [-1, 1] to [0, 1]
+                # Clip to ensure values are in [0, 1]
+                image = torch.clamp(image, 0.0, 1.0)
+                print(f"Normalized range: min={image.min().item():.3f}, max={image.max().item():.3f}, mean={image.mean().item():.3f}")
+                image = (image * 255).numpy().astype(np.uint8)  # Scale to 0-255
+                image = [Image.fromarray(img) for img in image]
+                print(f"Manual postprocessed image sizes: {[img.size for img in image]}")  # Debug
+                # Resize to requested resolution
+                image = [img.resize((original_width, original_height), resample=Image.LANCZOS) for img in image]
+                print(f"Final image sizes: {[img.size for img in image]}")  # Debug
+            else:
+                image = self.image_processor.postprocess(image, output_type=output_type)
 
         # Offload all models
         self.maybe_free_model_hooks()
