@@ -29,8 +29,8 @@ MODEL_CONFIGS = {
     },
     "fast": {
         "path": f"{MODEL_PREFIX}/HiDream-I1-Fast-nf4",
-        "guidance_scale": 0.0,
-        "num_inference_steps": 16,
+        "guidance_scale": 2,
+        "num_inference_steps": 25,
         "shift": 3.0,
         "scheduler": FlashFlowMatchEulerDiscreteScheduler
     }
@@ -52,7 +52,7 @@ def load_models(model_type: str):
         output_hidden_states=True,
         output_attentions=True,
         return_dict_in_generate=True,
-        torch_dtype=torch.bfloat16,
+        torch_dtype=torch.bfloat16,  # Reverted to bfloat16
         device_map="auto",
     )
     log_vram("✅ Text encoder loaded!")
@@ -60,7 +60,7 @@ def load_models(model_type: str):
     transformer = HiDreamImageTransformer2DModel.from_pretrained(
         config["path"],
         subfolder="transformer",
-        torch_dtype=torch.bfloat16
+        torch_dtype=torch.bfloat16  # Reverted to bfloat16
     )
     log_vram("✅ Transformer loaded!")
     
@@ -69,9 +69,11 @@ def load_models(model_type: str):
         scheduler=config["scheduler"](num_train_timesteps=1000, shift=config["shift"], use_dynamic_shifting=False),
         tokenizer_4=tokenizer_4,
         text_encoder_4=text_encoder_4,
-        torch_dtype=torch.bfloat16,
+        torch_dtype=torch.bfloat16,  # Reverted to bfloat16
     )
     pipe.transformer = transformer
+    # Override VAE sample_size
+    pipe.vae.config.sample_size = 120  # For 1920/16 = 120
     log_vram("✅ Pipeline loaded!")
     pipe.enable_sequential_cpu_offload()
     
@@ -85,6 +87,9 @@ def generate_image(pipe: HiDreamImagePipeline, model_type: str, prompt: str, res
     guidance_scale = config["guidance_scale"]
     num_inference_steps = config["num_inference_steps"]
     
+    width, height = resolution
+    print(f"Input resolution: {width}x{height}")  # Debug
+
     # Parse resolution
     width, height = resolution
  
@@ -105,4 +110,3 @@ def generate_image(pipe: HiDreamImagePipeline, model_type: str, prompt: str, res
     ).images
     
     return images[0], seed
-
