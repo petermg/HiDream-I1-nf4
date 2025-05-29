@@ -1,6 +1,6 @@
 import torch
 from transformers import LlamaForCausalLM, PreTrainedTokenizerFast
-
+from transformers import AutoConfig
 from . import HiDreamImagePipeline
 from . import HiDreamImageTransformer2DModel
 from .schedulers.fm_solvers_unipc import FlowUniPCMultistepScheduler
@@ -42,40 +42,46 @@ def log_vram(msg: str):
 
 
 def load_models(model_type: str):
-    config = MODEL_CONFIGS[model_type]
-    
+    model_cfg = MODEL_CONFIGS[model_type]  # ✅ renamed from config to avoid collision
+
     tokenizer_4 = PreTrainedTokenizerFast.from_pretrained(LLAMA_MODEL_NAME)
     log_vram("✅ Tokenizer loaded!")
-    
+
+    llama_config = AutoConfig.from_pretrained(LLAMA_MODEL_NAME)  # ✅ use a distinct name
+    llama_config.output_attentions = True
+    llama_config.output_hidden_states = True
+    llama_config.return_dict_in_generate = True
+
     text_encoder_4 = LlamaForCausalLM.from_pretrained(
         LLAMA_MODEL_NAME,
-        output_hidden_states=True,
-        output_attentions=True,
-        return_dict_in_generate=True,
+        config=llama_config,
         torch_dtype=torch.bfloat16,
+        attn_implementation="flash_attention_2",  # ✅ this is critical
         device_map="auto",
     )
+    
     log_vram("✅ Text encoder loaded!")
 
     transformer = HiDreamImageTransformer2DModel.from_pretrained(
-        config["path"],
+        model_cfg["path"],
         subfolder="transformer",
         torch_dtype=torch.bfloat16
     )
     log_vram("✅ Transformer loaded!")
-    
+
     pipe = HiDreamImagePipeline.from_pretrained(
-        config["path"],
-        scheduler=config["scheduler"](num_train_timesteps=1000, shift=config["shift"], use_dynamic_shifting=False),
+        model_cfg["path"],
+        scheduler=model_cfg["scheduler"](num_train_timesteps=1000, shift=model_cfg["shift"], use_dynamic_shifting=False),
         tokenizer_4=tokenizer_4,
         text_encoder_4=text_encoder_4,
         torch_dtype=torch.bfloat16,
     )
     pipe.transformer = transformer
+    pipe.config.output_attentions = True
     log_vram("✅ Pipeline loaded!")
     pipe.enable_sequential_cpu_offload()
-    
-    return pipe, config
+
+    return pipe, model_cfg
 
 
 @torch.inference_mode()
@@ -105,4 +111,3 @@ def generate_image(pipe: HiDreamImagePipeline, model_type: str, prompt: str, res
     ).images
     
     return images[0], seed
-
