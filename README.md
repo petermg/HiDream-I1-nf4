@@ -1,3 +1,5 @@
+## you can find flash_attn wheels that you can use for this [here.](https://github.com/petermg/flash_attn_windows/releases)
+
 # HiDream-I1 4Bit Quantized Model
 
 This repository is a fork of `HiDream-I1` quantized to 4 bits, allowing the full model to run in less than 16GB of VRAM. 
